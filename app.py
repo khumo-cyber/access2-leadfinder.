@@ -36,20 +36,29 @@ def scrape_leads(niche, city, api_key):
         st.error(f"Error fetching leads: {e}")
     return results
 
-# --- APP UI ---
+# --- PAGE CONFIG ---
 st.set_page_config(page_title="Access 2 Lead Finder", layout="wide")
 st.title("🚀 Access 2 — AI Lead Finder (Beta)")
+st.caption("Find qualified local leads automatically using AI and live Google data.")
 
-# --- Sidebar Inputs ---
-st.sidebar.header("Search Settings")
-niche = st.sidebar.text_input("Business type or niche", "dentists")
-city = st.sidebar.text_input("City", "Cape Town")
-api_key = st.sidebar.text_input("Your SerpAPI Key", type="password")
-outreach_msg = st.sidebar.text_area("Custom Outreach Message Template", 
-                                    "Hey {name}, I came across your business and wanted to share how we can help you get more leads through AI.")
-search_btn = st.sidebar.button("Find Leads")
+# --- MAIN INTERFACE ---
+st.markdown("### 🔍 Search for Leads")
 
-# --- Search Functionality ---
+col1, col2 = st.columns(2)
+with col1:
+    niche = st.text_input("Business type or niche", "dentists")
+with col2:
+    city = st.text_input("City", "Cape Town")
+
+api_key = st.text_input("Your SerpAPI Key", type="password", placeholder="Enter your API key (required for now)")
+outreach_msg = st.text_area(
+    "Custom Outreach Message Template",
+    "Hey {name}, I came across your business and wanted to share how we can help you get more leads through AI."
+)
+
+search_btn = st.button("Find Leads 🚀")
+
+# --- SEARCH ACTION ---
 if search_btn:
     if not api_key:
         st.warning("Please enter your SerpAPI key first.")
@@ -62,7 +71,7 @@ if search_btn:
         st.success(f"✅ Done! Collected {len(leads)} leads.")
         if leads:
             for i, lead in enumerate(leads, 1):
-                st.write(f"**{i}. {lead['name']}**")
+                st.markdown(f"### {i}. {lead['name']}")
                 st.write(f"📍 {lead.get('address', 'N/A')}")
                 if lead.get("phone"):
                     st.write(f"📞 {lead['phone']}")
@@ -72,8 +81,8 @@ if search_btn:
                 st.code(msg, language="markdown")
                 st.divider()
 
-# --- Feedback Section ---
-st.header("💬 Leave Feedback")
+# --- FEEDBACK FORM ---
+st.markdown("## 💬 Leave Feedback")
 name = st.text_input("Your Name (optional)")
 feedback = st.text_area("What do you think of Access 2 so far?")
 if st.button("Submit Feedback"):
@@ -84,9 +93,8 @@ if st.button("Submit Feedback"):
     else:
         st.warning("Please type some feedback first.")
 
-# --- Admin Login ---
-st.sidebar.divider()
-st.sidebar.subheader("🔒 Admin Login")
+# --- SIDEBAR: ADMIN LOGIN ONLY ---
+st.sidebar.header("🔒 Admin Panel")
 admin_pwd = st.sidebar.text_input("Enter Admin Password", type="password")
 if admin_pwd == "Access2Admin123":
     st.sidebar.success("Admin logged in ✅")

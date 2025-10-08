@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -14,13 +13,11 @@ HEADERS = {'User-Agent': 'Mozilla/5.0'}
 EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 KEYWORDS = ['appointment','book','contact','services','call','clinic','practice','schedule','client','clients','portfolio','projects','store','shop','products','gallery']
 
-# DB Init
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute('''CREATE TABLE IF NOT EXISTS leads (id INTEGER PRIMARY KEY AUTOINCREMENT,business_name TEXT,domain TEXT,url TEXT,email TEXT,meta_description TEXT,score INTEGER,message TEXT,scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.close()
 
-# DuckDuckGo Search
 def duckduckgo_search(query, max_results=10):
     url = 'https://html.duckduckgo.com/html/'
     data = {'q': query}
@@ -36,7 +33,6 @@ def duckduckgo_search(query, max_results=10):
             break
     return links
 
-# Fetch Page
 def fetch_page(url):
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
@@ -46,7 +42,6 @@ def fetch_page(url):
         return ''
     return ''
 
-# Extract Info
 def extract_from_page(html):
     soup = BeautifulSoup(html, 'lxml')
     title = soup.title.string.strip() if soup.title else ''
@@ -108,40 +103,4 @@ def save_leads_to_db(leads):
     cur = conn.cursor()
     for L in leads:
         cur.execute("INSERT INTO leads (business_name, domain, url, email, meta_description, score, message) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (L.get('title',''), L.get('domain',''), L.get('url',''), L.get('email',''), L.get('meta_description',''), L.get('score',0), L.get('message','')))
-    conn.commit()
-    conn.close()
-
-st.set_page_config(page_title='Access 2 — Free Lead Finder', layout='wide')
-st.title('Access 2 — Free Lead Finder (MVP)')
-with st.sidebar:
-    st.header('Search')
-    niche = st.text_input('Niche')
-    city = st.text_input('City')
-    num = st.slider('Results to fetch',5,30,10)
-    your_name = st.text_input('Your name','Khumo')
-    run = st.button('Find leads')
-
-if run:
-    if not niche or not city:
-        st.error('Please enter both niche and city.')
-    else:
-        init_db()
-        with st.spinner('Searching and scraping...'):
-            leads = scrape_leads(niche, city, num)
-            for L in leads:
-                L['score'] = score_lead(L)
-                L['message'] = generate_message(L, your_name)
-            save_leads_to_db(leads)
-        df = pd.DataFrame(leads)
-        st.dataframe(df[['domain','url','email','score']].sort_values('score',ascending=False))
-        csv = df.to_csv(index=False)
-        st.download_button('Download CSV', csv, file_name='leads.csv', mime='text/csv')
-        for i,row in df.sort_values('score',ascending=False).iterrows():
-            st.markdown(f"**{row.get('domain','')}** — score: {row.get('score',0)}")
-            st.code(row.get('message',''))
-```
-
-This is now the **entire Access 2 MVP in one file** — just save as `app.py`, install Streamlit, and run it.
-
-If you want, I can now give you a **super simple one-command setup** so you can run this instantly without manually installing anything extra.
+                    (L.ge

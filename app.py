@@ -1,99 +1,143 @@
 import streamlit as st
-import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+import time
+import re
+from urllib.parse import urlparse
+import tldextract
 import sqlite3
-from scraper import scrape_leads
-from ai_module import score_lead, generate_message
-from db_init import init_db
+import pandas as pd
 
 DB_PATH = 'leads.db'
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36'
+}
+EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+KEYWORDS = [
+    'appointment','book','contact','services','call','clinic','practice','schedule',
+    'client','clients','portfolio','projects','store','shop','products','gallery'
+]
 
-# === ADMIN MODE ===
-if st.sidebar.checkbox("Admin login"):
-    password = st.sidebar.text_input("Enter admin password", type="password")
-    if password == "YourPasswordHere":  # <-- change this to your secure password
-        st.title("🔒 Admin Dashboard")
-
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            df = pd.read_sql('SELECT * FROM leads', conn)
-            conn.close()
-        except Exception as e:
-            st.error(f"Error loading database: {e}")
-            st.stop()
-
-        if df.empty:
-            st.warning("No leads found in the database yet.")
-        else:
-            st.dataframe(df)
-
-        st.stop()  # stop the rest of the app from loading for admin view
-
-# === MAIN APP ===
-def save_leads_to_db(leads, db_path=DB_PATH):
+# === DATABASE INIT ===
+def init_db(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    for L in leads:
-        cur.execute(
-            "INSERT INTO leads (business_name, domain, url, email, meta_description, score, message) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                L.get('title') or '',
-                L.get('domain') or '',
-                L.get('url') or '',
-                L.get('email') or '',
-                L.get('meta_description') or '',
-                L.get('score') or 0,
-                L.get('message') or '',
-            )
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            business_name TEXT,
+            domain TEXT,
+            url TEXT,
+            email TEXT,
+            meta_description TEXT,
+            score INTEGER,
+            message TEXT,
+            scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    ''')
     conn.commit()
     conn.close()
 
-st.set_page_config(page_title='Access 2 — Free Lead Finder', layout='wide')
-st.title('Access 2 — Free Lead Finder (MVP)')
-st.write('Type a niche and city, find local leads, get a score and short outreach message. Fully free.')
+# === SCRAPER ===
+def duckduckgo_search(query, max_results=10, pause=1.0):
+    url = 'https://html.duckduckgo.com/html/'
+    data = {'q': query}
+    try:
+        r = requests.post(url, data=data, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(r.text, 'lxml')
+        links = []
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if href.startswith('http') and 'duckduckgo.com' not in href:
+                if href not in links:
+                    links.append(href)
+            if len(links) >= max_results:
+                break
+        time.sleep(pause)
+        return links
+    except Exception as e:
+        print('Search failed:', e)
+        return []
 
-with st.sidebar:
-    st.header('Search')
-    niche = st.text_input('Niche (e.g. dentist, marketing agency)')
-    city = st.text_input('City (e.g. Cape Town)')
-    num = st.slider('How many search results to fetch', 5, 30, 10)
-    your_name = st.text_input('Your name (for messages)', 'Khumo')
-    run = st.button('Find leads')
+def fetch_page(url, pause=0.5):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        time.sleep(pause)
+        if r.status_code == 200:
+            return r.text
+    except Exception as e:
+        print('fetch_page error', url, e)
+    return ''
 
-if run:
-    if not niche or not city:
-        st.error('Please enter both niche and city.')
-    else:
-        init_db()  # ensure DB exists
-        with st.spinner('Searching and scraping — this may take a minute...'):
-            leads = scrape_leads(niche, city, max_results=num)
-            processed = []
-            for L in leads:
-                sc = score_lead(L)
-                msg = generate_message(L, your_name=your_name)
-                L['score'] = sc
-                L['message'] = msg
-                processed.append(L)
-            save_leads_to_db(processed)
+def extract_from_page(html, url):
+    soup = BeautifulSoup(html, 'lxml')
+    title = (soup.title.string.strip() if soup.title and soup.title.string else '')
+    meta_desc = ''
+    md = soup.find('meta', attrs={'name': 'description'})
+    if md and md.get('content'):
+        meta_desc = md['content'].strip()
+    if not meta_desc:
+        og = soup.find('meta', attrs={'property': 'og:description'})
+        if og and og.get('content'):
+            meta_desc = og['content'].strip()
 
-        df = pd.DataFrame(processed)
-        if df.empty:
-            st.warning('No leads found. Try increasing results or changing query.')
+    text = soup.get_text(separator=' ', strip=True)
+    emails = set(re.findall(EMAIL_REGEX, text))
+    has_contact = any('contact' in a['href'].lower() for a in soup.find_all('a', href=True))
+    return {
+        'title': title,
+        'meta_description': meta_desc,
+        'text': text[:4000],
+        'emails': list(emails),
+        'has_contact_page': has_contact,
+    }
+
+def to_domain(url):
+    try:
+        parsed = urlparse(url)
+        ext = tldextract.extract(parsed.netloc)
+        return ext.domain + ('.' + ext.suffix if ext.suffix else '')
+    except:
+        return url
+
+def scrape_leads(niche, city, max_results=20):
+    query = f"{niche} in {city}"
+    urls = duckduckgo_search(query, max_results=max_results)
+    leads = []
+    for u in urls:
+        info = {
+            'url': u,
+            'domain': to_domain(u),
+            'niche': niche,
+            'city': city,
+        }
+        page_html = fetch_page(u)
+        if page_html:
+            extracted = extract_from_page(page_html, u)
+            info.update(extracted)
+            info['email'] = extracted['emails'][0] if extracted['emails'] else ''
         else:
-            st.subheader('Leads found')
-            st.dataframe(df[['domain','url','email','score']].sort_values('score', ascending=False))
-            csv = df.to_csv(index=False)
-            st.download_button('Download CSV', csv, file_name='leads.csv', mime='text/csv')
-            st.markdown('### Messages (copy & paste to send manually)')
-            for i, row in df.sort_values('score', ascending=False).iterrows():
-                st.markdown(f"**{row.get('domain','')}** — score: {row.get('score',0)}")
-                st.code(row.get('message',''), language='text')
+            info.update({'title': '', 'meta_description': '', 'text': '', 'emails': [], 'has_contact_page': False, 'email': ''})
+        leads.append(info)
+    return leads
 
-try:
-    conn = sqlite3.connect(DB_PATH)
-    total = pd.read_sql('SELECT COUNT(*) as c FROM leads', conn)['c'][0]
-    conn.close()
-    st.sidebar.markdown(f"**Leads saved in DB:** {total}")
-except Exception:
-    pass
+# === SCORING + MESSAGE GENERATION ===
+def score_lead(lead: dict) -> int:
+    score = 0
+    if lead.get('email'):
+        score += 40
+    if lead.get('has_contact_page'):
+        score += 20
+    wc = len((lead.get('text') or '').split())
+    if wc > 150:
+        score += 20
+    matches = sum(1 for k in KEYWORDS if k in (lead.get('text') or '').lower())
+    score += min(matches * 5, 20)
+    return min(score, 100)
+
+def generate_message(lead: dict, your_name: str = 'Khumo') -> str:
+    biz = lead.get('title') or lead.get('domain') or 'there'
+    city = lead.get('city') or ''
+    niche = lead.get('niche') or 'business'
+    obs = ''
 

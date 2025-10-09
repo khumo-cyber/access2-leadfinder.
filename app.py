@@ -1,112 +1,76 @@
 import streamlit as st
-import requests
-import sqlite3
+import pandas as pd
 import time
+from scraper import scrape_leads  # Your scraper logic
+from datetime import datetime
 
-# --- DATABASE SETUP ---
-conn = sqlite3.connect("access2_feedback.db", check_same_thread=False)
-c = conn.cursor()
-c.execute("""
-    CREATE TABLE IF NOT EXISTS feedback (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        feedback TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-""")
-conn.commit()
+# App configuration
+st.set_page_config(page_title="AI Lead Finder", page_icon="🤖", layout="centered")
 
-# --- SCRAPER FUNCTION (SERPAPI) ---
-def scrape_leads(niche, city, api_key):
-    query = f"{niche} in {city}"
-    url = f"https://serpapi.com/search.json?engine=google_maps&q={query}&type=search&api_key={api_key}"
-    results = []
-    try:
-        res = requests.get(url)
-        data = res.json()
-        for business in data.get("local_results", []):
-            results.append({
-                "name": business.get("title"),
-                "address": business.get("address"),
-                "website": business.get("website"),
-                "phone": business.get("phone"),
-                "rating": business.get("rating"),
-            })
-    except Exception as e:
-        st.error(f"Error fetching leads: {e}")
-    return results
+# --- Authentication ---
+ADMIN_PASSWORD = st.secrets["auth"]["admin_password"]  # Securely loaded from secrets.toml
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Access 2 Lead Finder", layout="wide")
-st.title("🚀 Access 2 — AI Lead Finder (Beta)")
-st.caption("Find qualified local leads automatically using AI and live Google data.")
+# Sidebar for admin login
+st.sidebar.title("Admin Login")
+password = st.sidebar.text_input("Enter admin password", type="password")
 
-# --- MAIN INTERFACE ---
-st.markdown("### 🔍 Search for Leads")
+is_admin = password == ADMIN_PASSWORD
 
-col1, col2 = st.columns(2)
-with col1:
-    niche = st.text_input("Business type or niche", "dentists")
-with col2:
-    city = st.text_input("City", "Cape Town")
+# --- Title ---
+st.title("🔍 AI Lead Finder")
+st.write("Find high-quality leads fast using AI-powered business searches.")
 
-api_key = st.text_input("Your SerpAPI Key", type="password", placeholder="Enter your API key (required for now)")
-outreach_msg = st.text_area(
-    "Custom Outreach Message Template",
-    "Hey {name}, I came across your business and wanted to share how we can help you get more leads through AI."
-)
+# --- Lead search section ---
+query = st.text_input("What kind of leads are you looking for?", placeholder="Example: digital marketing agencies in Cape Town")
+num_results = st.slider("Number of leads to collect", 5, 50, 10)
 
-search_btn = st.button("Find Leads 🚀")
-
-# --- SEARCH ACTION ---
-if search_btn:
-    if not api_key:
-        st.warning("Please enter your SerpAPI key first.")
+if st.button("Start Search"):
+    if not query.strip():
+        st.warning("Please enter a search query.")
     else:
-        with st.spinner("Finding leads..."):
-            progress = st.progress(0)
-            leads = scrape_leads(niche, city, api_key)
-            time.sleep(0.3)
-            progress.progress(100)
-        st.success(f"✅ Done! Collected {len(leads)} leads.")
-        if leads:
-            for i, lead in enumerate(leads, 1):
-                st.markdown(f"### {i}. {lead['name']}")
-                st.write(f"📍 {lead.get('address', 'N/A')}")
-                if lead.get("phone"):
-                    st.write(f"📞 {lead['phone']}")
-                if lead.get("website"):
-                    st.write(f"🌐 {lead['website']}")
-                msg = outreach_msg.replace("{name}", lead["name"])
-                st.code(msg, language="markdown")
-                st.divider()
+        with st.spinner("Collecting leads..."):
+            start_time = time.time()
+            leads = scrape_leads(query, num_results)
+            duration = time.time() - start_time
 
-# --- FEEDBACK FORM ---
-st.markdown("## 💬 Leave Feedback")
-name = st.text_input("Your Name (optional)")
-feedback = st.text_area("What do you think of Access 2 so far?")
-if st.button("Submit Feedback"):
-    if feedback.strip():
-        c.execute("INSERT INTO feedback (name, feedback) VALUES (?, ?)", (name, feedback))
-        conn.commit()
-        st.success("Thanks for your feedback!")
-    else:
-        st.warning("Please type some feedback first.")
+        if leads and len(leads) > 0:
+            st.success(f"✅ Done! Collected {len(leads)} leads in {duration:.1f}s")
 
-# --- SIDEBAR: ADMIN LOGIN ONLY ---
-st.sidebar.header("🔒 Admin Panel")
-admin_pwd = st.sidebar.text_input("Enter Admin Password", type="password")
-if admin_pwd == "Access2Admin123":
-    st.sidebar.success("Admin logged in ✅")
-    show_feedback = st.sidebar.checkbox("View Feedback")
-    if show_feedback:
-        st.header("📊 User Feedback")
-        rows = c.execute("SELECT name, feedback, timestamp FROM feedback ORDER BY timestamp DESC").fetchall()
-        if not rows:
-            st.info("No feedback yet.")
+            df = pd.DataFrame(leads)
+            st.dataframe(df)
+
+            # Export CSV
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Download leads as CSV", csv, f"leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv")
+
+            # Feedback section
+            st.subheader("💬 Feedback")
+            feedback = st.text_area("How was your experience?", placeholder="Share any issues or ideas...")
+            if st.button("Submit Feedback"):
+                with open("feedback.txt", "a") as f:
+                    f.write(f"{datetime.now()} | {feedback}\n")
+                st.success("Thanks for your feedback!")
         else:
-            for r in rows:
-                st.write(f"**{r[0] or 'Anonymous'}** ({r[2]}): {r[1]}")
-else:
-    if admin_pwd:
-        st.sidebar.error("Incorrect password.")
+            st.error("No leads found. Try a different search query.")
+
+# --- Admin Dashboard ---
+if is_admin:
+    st.markdown("---")
+    st.header("🧠 Admin Dashboard")
+    st.write("You are logged in as admin.")
+
+    try:
+        with open("feedback.txt", "r") as f:
+            feedback_data = f.readlines()
+
+        if feedback_data:
+            st.subheader("🗣 User Feedback")
+            for entry in feedback_data[::-1]:  # Show newest first
+                st.write(entry.strip())
+        else:
+            st.info("No feedback yet.")
+    except FileNotFoundError:
+        st.info("No feedback file found yet.")
+elif password:
+    st.error("Incorrect password.")
+

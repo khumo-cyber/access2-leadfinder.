@@ -37,3 +37,5 @@ def scrape_leads(query, num_results=10, api_key=None):
         })
 
     return leads
+
+    return leads
